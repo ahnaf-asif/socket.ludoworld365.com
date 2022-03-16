@@ -14,5 +14,3 @@ require('./socket/ludo/ludo-random.js')(io);
 
 
 httpServer.listen(3069);
-
-// http://localhost:3069

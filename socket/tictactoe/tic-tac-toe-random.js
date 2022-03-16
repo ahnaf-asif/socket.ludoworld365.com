@@ -75,6 +75,7 @@ function endRunningGame(id){
     for(let i = 0; i < tictactoeRunningGames.length;i++){
         if(tictactoeRunningGames[i].getPlayer1().id === id || tictactoeRunningGames[i].getPlayer2().id === id){
             tictactoeRunningGames[i].changeStatus('ended');
+            tictactoeRunningGames.splice(i, 1);
         }
     }
 }
@@ -105,7 +106,7 @@ module.exports = function(io){
                             player2: game.getPlayer2().username,
                             betAmount: game.betAmount
                         })
-                    }).then(function(res){
+                    }).then(function(res){ 
                         
                         // console.log(res.data)
                         game.setId(res.data.id);

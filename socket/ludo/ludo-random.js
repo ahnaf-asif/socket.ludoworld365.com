@@ -7,9 +7,9 @@ axios.defaults.headers.post['Content-Type'] = 'application/json';
 const Player = require('../playerClass');
 const Game = require('../twoPlayerGameClass');
 
-const ludoDetails = require('./path');
+// const ludoDetails = require('./path');
 
-console.log(ludoDetails.redPath[57], ludoDetails.bluePath.length);
+// console.log(ludoDetails.redPath[57], ludoDetails.bluePath.length);
   
 ludoLobby = [];
 ludoRunningGames = [];
@@ -44,7 +44,9 @@ function makeGame(id, username, betAmount){
 function endRunningGame(id){
     for(let i = 0; i < ludoRunningGames.length;i++){
         if(ludoRunningGames[i].getPlayer1().id === id || ludoRunningGames[i].getPlayer2().id === id){
-            ludoRunningGames[i].changeStatus('ended');
+            // ludoRunningGames[i].changeStatus('ended');
+            ludoRunningGames.splice(i, 1);
+            return;
         }
     }
 }
@@ -61,6 +63,13 @@ function findMoveablePieces(piecePositions, num){
     return moveablePieces;
      
 } 
+function gameFinished(piecePositions){
+    let cnt = 0;
+    for(let i = 0; i < 4;i++){
+        if(piecePositions[i] >= 57)cnt++;
+    }
+    return cnt === 4;
+}
 
 module.exports = function(io){ 
     io.on("connection", (socket) => {
@@ -79,19 +88,31 @@ module.exports = function(io){
                 
                 let game = makeGame(socket.id, username, betAmount);
                 if(game.isCreated()){
-                   
-                    game.setId(69);
-                    ludoRunningGames.push(game);
+                    
+                    axios({
+                        method: 'post',
+                        url: '/ludo/create/game',
+                        data: JSON.stringify({
+                            player1: game.getPlayer1().username,
+                            player2: game.getPlayer2().username,
+                            betAmount: game.betAmount
+                        })
+                    }).then(function(res){
+                        game.setId(res.data.id);
+                        ludoRunningGames.push(game);
 
-                    let response = {
-                        status: 'playing',
-                        game: game,
-                        message: 'Game Running !!'
-                    };   
+                        let response = {
+                            status: 'playing',
+                            game: game,
+                            message: 'Game Running !!'
+                        };   
 
-                    io.to(game.getPlayer1().id).emit('game-started', response);
+                        io.to(game.getPlayer1().id).emit('game-started', response);
 
-                    callback(response);                  
+                        callback(response);
+                    }).catch(function(err){
+                        console.log(err);
+                    });                 
                 }
                 else{
                     // push the user to the ludoLobby and let him wait...
@@ -107,7 +128,7 @@ module.exports = function(io){
             }
         });
         // player1 is always blue and player2 is green
-        socket.on('cube-spinned', (game, playerPiecePositions, num, callback)=>{
+        socket.on('ludo-cube-spinned', (game, playerPiecePositions, num, callback)=>{
             // console.log('dice number: ', num); 
             let moveablePieces = findMoveablePieces(playerPiecePositions, num);
             res = { 
@@ -121,7 +142,7 @@ module.exports = function(io){
                 io.to(game.player1.id).emit('opponent-cube-spinned', num);
             }
         }); 
-        socket.on('piece-moved', (game, index, lastMove, callback)=>{
+        socket.on('ludo-piece-moved', (game, index, lastMove, callback)=>{
             // index is the index of piece
             callback('got it');
             if(game.player1.id === socket.id){
@@ -130,7 +151,7 @@ module.exports = function(io){
                 io.to(game.player1.id).emit('opponent-piece-moved', index, lastMove);
             }
         });
-        socket.on('piece-captured', (game, captureColor, captureId, callback)=>{
+        socket.on('ludo-piece-captured', (game, captureColor, captureId, callback)=>{
             callback('got it');
             if(game.player1.id === socket.id){
                 io.to(game.player2.id).emit('piece-captured', captureColor, captureId);
@@ -138,20 +159,102 @@ module.exports = function(io){
                 io.to(game.player1.id).emit('piece-captured', captureColor, captureId);
             }
         });
-        socket.on('piece-move-done', (game, callback)=>{
-            game.moveId = game.moveId === game.player1.id ? game.player2.id: game.player1.id;
-            let res = {game: game};
-            if(socket.id === game.player1.id){
-                io.to(game.player2.id).emit('opponent-move-done', res);
-            }else{
-                io.to(game.player1.id).emit('opponent-move-done', res);
-            }
-            callback(res);
+        socket.on('ludo-piece-move-done', (game, piecePositions, callback)=>{
+            let res = {};
+            // console.log(callback, typeof callback);
+            if(gameFinished(piecePositions)){
+                
+                game.moveId = null;
+                game.status = 'ended';
+                game.winnerId = socket.id;
+                endRunningGame(game.winnerId);
+                let winner = '';
+                if(game.player1.id === game.winnerId)winner = game.player1.username;
+                else winner = game.player2.username;
 
+                axios({
+                    method: 'post',
+                    url: `/ludo/update/game/${game.id}`,
+                    data: JSON.stringify({
+                        status: 'ended',
+                        result: 'win-loss',
+                        winner: winner
+                    })
+                }).then(function(result){
+
+                    res = {
+                        status: 'ended',
+                        game: game
+                    };
+                    if(socket.id === game.player1.id){
+                        io.to(game.player2.id).emit('game-lost', res);
+                    }else{
+                        io.to(game.player1.id).emit('game-lost', res);
+                    }
+                    callback(res);
+                }).catch(function (err){
+                    console.log(err);
+                });
+
+            }else{
+                game.moveId = game.moveId === game.player1.id ? game.player2.id: game.player1.id;
+                res = {
+                    status: 'continue',
+                    game: game
+                };
+                // console.log('game not finished yet');
+                if(socket.id === game.player1.id){
+                    io.to(game.player2.id).emit('opponent-move-done', res);
+                }else{
+                    io.to(game.player1.id).emit('opponent-move-done', res);
+                }
+                callback(res);
+            }
+            
+
+            
+                
+            
         });
  
-        socket.on('time-over', (game, callback)=>{
+        socket.on('ludo-time-over', (game, callback)=>{
             
+            endRunningGame(game.winnerId);
+
+            game.winnerId = game.player1.id;
+            if(socket.id === game.winnerId){
+                game.winnerId = game.player2.id; // basically the other player is the winner
+            }
+            game.status = 'ended';
+            let winner = '';
+            if(game.player1.id === game.winnerId)winner = game.player1.username;
+            else winner = game.player2.username;
+
+            axios({
+                method: 'post',
+                url: `/ludo/update/game/${game.id}`,
+                data: JSON.stringify({
+                    status: 'ended',
+                    result: 'win-loss', 
+                    winner: winner
+                })
+            }).then(function(result){
+                let res = {
+                    status: 'ended',
+                    game: game
+                };
+
+                if(socket.id === game.player1.id){
+                    io.to(game.player2.id).emit('opponent-timeout', res);
+                }else{
+                    io.to(game.player1.id).emit('opponent-timeout', res);
+                }
+                callback(res);
+
+            }).catch(function (err){
+                console.log(err);
+            });
+
         }); 
         
         socket.on('disconnect', ()=>{
@@ -166,15 +269,25 @@ module.exports = function(io){
 
                     ludoRunningGames[i].setWinnerId(winner);
                     ludoRunningGames[i].changeStatus('ended');
-                    
-                    let response = {
-                        status: 'ended',
-                        game: ludoRunningGames[i],
-                        message: 'Opponent Disconnected'
-                    };
-                    io.to(winner).emit('game-ended', response);
-                    ludoRunningGames.splice(i, 1);
-                    
+                    axios({
+                        method: 'post',
+                        url: `/ludo/update/game/${ludoRunningGames[i].id}`,
+                        data: JSON.stringify({
+                            status: 'ended',
+                            result: 'win-loss',
+                            winner: winnerUsername
+                        })
+                    }).then(function(res){
+                        let response = {
+                            status: 'ended',
+                            game: ludoRunningGames[i],
+                            message: 'Opponent Disconnected'
+                        };
+                        io.to(winner).emit('opponent-disconnected', response);
+                        ludoRunningGames.splice(i, 1);
+                    }).catch(function(err){
+                        console.log(err);
+                    })
                     break;
 
                 }else if(ludoRunningGames[i].getPlayer2().id === socket.id){
@@ -183,15 +296,25 @@ module.exports = function(io){
 
                     ludoRunningGames[i].setWinnerId(winner);
                     ludoRunningGames[i].changeStatus('ended');
-                    
-                    let response = {
-                        status: 'ended',
-                        game: ludoRunningGames[i],
-                        message: 'Opponent Disconnected'
-                    };
-                    io.to(winner).emit('game-ended', response);
-                    ludoRunningGames.splice(i, 1);
-                    
+                    axios({
+                        method: 'post',
+                        url: `/ludo/update/game/${ludoRunningGames[i].id}`,
+                        data: JSON.stringify({
+                            status: 'ended',
+                            result: 'win-loss',
+                            winner: winnerUsername
+                        })
+                    }).then(function(res){
+                        let response = {
+                            status: 'ended',
+                            game: ludoRunningGames[i],
+                            message: 'Opponent Disconnected'
+                        };
+                        io.to(winner).emit('opponent-disconnected', response);
+                        ludoRunningGames.splice(i, 1);
+                    }).catch(function(err){
+                        console.log(err);
+                    })
                     break;
                 }
             }
@@ -203,5 +326,6 @@ module.exports = function(io){
                 }
             }
         });
+        // console.log(`${socket.id} disconnected `, ludoLobby, ludoRunningGames);
     });
 }
